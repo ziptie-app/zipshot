@@ -20,7 +20,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Toolchain
         run: |
@@ -62,7 +62,7 @@ jobs:
           ditto -c -k --keepParent build/ZipShot.app "$ZIP"
           shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ZipShot-${{ env.VERSION }}
           path: |
