@@ -11,14 +11,27 @@
 # identity (a self-signed "Code Signing" certificate from Keychain Access works):
 #
 #   ZIPSHOT_SIGN_IDENTITY="My Certificate Name" Scripts/build-app.sh
+#
+# For releases (see .github/workflows/release.yml):
+#
+#   ZIPSHOT_VERSION=1.2    version shown in Finder and the About panel
+#   ZIPSHOT_BUILD=57       build number
+#   ZIPSHOT_UNIVERSAL=1    build for Apple silicon and Intel; needs Xcode,
+#                          not just the Command Line Tools
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP=build/ZipShot.app
 IDENTITY="${ZIPSHOT_SIGN_IDENTITY:--}"
 
-swift build -c release --product ZipShot
-BIN="$(swift build -c release --show-bin-path)/ZipShot"
+ARCH_FLAGS=""
+if [ "${ZIPSHOT_UNIVERSAL:-}" = "1" ]; then
+    ARCH_FLAGS="--arch arm64 --arch x86_64"
+fi
+# shellcheck disable=SC2086  # the flags are meant to split into words
+swift build -c release --product ZipShot $ARCH_FLAGS
+# shellcheck disable=SC2086
+BIN="$(swift build -c release $ARCH_FLAGS --show-bin-path)/ZipShot"
 
 mkdir -p build
 if [ ! -f build/AppIcon.icns ] || [ Scripts/make-icon.swift -nt build/AppIcon.icns ]; then
@@ -32,6 +45,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ZipShot"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+if [ -n "${ZIPSHOT_VERSION:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ZIPSHOT_VERSION" "$APP/Contents/Info.plist"
+fi
+if [ -n "${ZIPSHOT_BUILD:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ZIPSHOT_BUILD" "$APP/Contents/Info.plist"
+fi
 codesign --force --sign "$IDENTITY" "$APP"
 
 echo "Built $APP"

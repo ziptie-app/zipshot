@@ -1,0 +1,94 @@
+name: Release
+
+# Pushing a tag like v1.2 builds ZipShot.app and publishes it as a GitHub
+# release. Running the workflow by hand builds the same zip and keeps it as a
+# workflow artifact, without releasing anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)-dev.$GITHUB_RUN_NUMBER"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "ZIP=ZipShot-$version.zip" >> "$GITHUB_ENV"
+
+      - name: Core checks
+        run: swift run -c release zipshot-selftest
+
+      - name: Build ZipShot.app
+        env:
+          ZIPSHOT_UNIVERSAL: "1"
+          ZIPSHOT_BUILD: ${{ github.run_number }}
+        run: ZIPSHOT_VERSION="${VERSION%%-*}" Scripts/build-app.sh
+
+      - name: Verify the app
+        run: |
+          app=build/ZipShot.app
+          codesign --verify --strict --verbose=2 "$app"
+          archs="$(lipo -archs "$app/Contents/MacOS/ZipShot")"
+          echo "architectures: $archs"
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist"
+
+      - name: Package
+        run: |
+          # ditto keeps the code signature intact inside the zip.
+          ditto -c -k --keepParent build/ZipShot.app "$ZIP"
+          shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZipShot-${{ env.VERSION }}
+          path: |
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install
+
+          1. Download **$ZIP** below and unzip it.
+          2. Drag **ZipShot** into your Applications folder and open it.
+          3. macOS will say it could not verify the app, because this build is not notarized by Apple. Open **System Settings › Privacy & Security**, scroll to **Security**, and click **Open Anyway** next to ZipShot.
+          4. Take a capture (⌥⇧1). macOS asks for screen recording permission once; turn ZipShot on, then let macOS reopen it.
+
+          Needs macOS 14 or later. Runs on Apple silicon and Intel.
+
+          SHA-256: \`$(cut -d' ' -f1 "$ZIP.sha256")\`
+          EOF
+          gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" \
+            --title "ZipShot $VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag
